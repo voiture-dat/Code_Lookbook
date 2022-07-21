@@ -1,0 +1,357 @@
+---
+title: "all_assignments"
+author: "Max Haberl"
+date: "20/02/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+``` {r setup}
+
+rm(list= ls())
+wd <- function() {  # helps converting a copied file path into r-eligible strings C:\Users\maxem\Documents\Uni\Master\WiSe 2021\DSPM 20\Assignments
+  x <- readClipboard()
+  x <- gsub("\\\\", "/", x)
+  return(x)
+}
+path <- wd()
+
+setwd(path)
+getwd()
+
+
+
+```
+## Assignment 1 - Cleaning out your closet
+
+```{r Ass1}
+library(readxl)
+library(tidyr)
+library(dplyr)
+fin_all <- lapply(excel_sheets("Ass1/financials_annual.xlsx"), read_excel, path = "Ass1/financials_annual.xlsx")
+
+financials_annual <- as.data.frame(fin_all[1])
+company_codes <- as.data.frame(fin_all[2])
+item_codes <- as.data.frame(fin_all[3])
+
+financials_annual <- financials_annual %>% separate(Code, into = c('company', 'item'), sep = "\\(")
+
+financials_annual$item <- gsub("\\)", "", financials_annual$item)
+
+years <- rep(NA, 20)
+for (i in 0:9) {
+  years[i+1] <- paste0('X200',i)
+}
+
+for (i in 10:19) {
+  years[i+1] <- paste0('X20',i)
+}
+financials_annual <- financials_annual %>% gather(unlist(years), key = "year", value = "KPI")
+
+financials_annual$year <- gsub("X", "", financials_annual$year)
+financials_annual[financials_annual == "NA"]  <- NA
+
+financials_annual <- inner_join(financials_annual, company_codes, by = c('company' = 'company_code'))
+
+financials_annual <- inner_join(financials_annual, item_codes, by = c('item' = 'item_code'))
+
+financials_annual$KPI <- as.numeric(financials_annual$KPI)
+financials_annual <- financials_annual[, -2]
+
+company_info <- read.csv2("Ass1/company_info.csv", skip = 1)
+
+company_info$company_name <- toupper(company_info$company_name)
+
+financials_annual <- left_join(financials_annual, company_info, by = "company_name")
+
+
+
+```
+
+## Assignment 2 - Visualizing unemployment in Germany
+
+```{r Ass2}
+rm(list= ls())
+library(ggplot2)
+library(raster)
+library(broom)
+#unzip("Ass2/district_level_ger.zip")
+shape <- shapefile("Ass2/district_level_ger/district_level_ger.shp")
+
+geospatial_data <- tidy(shape, region = 'NUTS_NAME')
+map_plot <- ggplot() + geom_polygon(geospatial_data, mapping = aes(x = long, y = lat, group = as.factor(group)), color = 'black', fill = 'gray40') + theme_void()
+
+
+unem <- read.csv2("Ass2/unemployment_data.csv", skip = 4)
+clean <- unem
+
+library(stringr)
+clean$region <- str_to_title(clean$region) # convert a string's first letter to capital, deal with bridging words later
+
+# Removing all broken char-strings in the respective dataset
+clean$region <- gsub(" A.", " a.", clean$region, fixed = TRUE)
+clean$region <- gsub(" I.", " i.", clean$region, fixed = TRUE)
+clean$region <- gsub(" An ", " an ", clean$region, fixed = TRUE)
+clean$region <- gsub(" Am ", " am ", clean$region, fixed = TRUE)
+clean$region <- gsub(" In ", " in ", clean$region, fixed = TRUE)
+clean$region <- gsub(" Der ", " der ", clean$region, fixed = TRUE)
+clean$region <- gsub("(De)", "(DE)", clean$region, fixed = TRUE)
+clean$region <- gsub("Opf.", "Opf", clean$region, fixed = TRUE)
+clean$region <- gsub("Im","im", clean$region, fixed = TRUE)
+geospatial_data$id <- gsub("Ã¤","ä", geospatial_data$id, fixed = TRUE) # just german things, originally was UTF-8 encoded, seems to be an issue with the RStudio GUI
+geospatial_data$id <- gsub("Ã¼","ü", geospatial_data$id, fixed = TRUE)
+geospatial_data$id <- gsub("Ã¶","ö", geospatial_data$id, fixed = TRUE)
+geospatial_data$id <- gsub("OPf.","Opf", geospatial_data$id, fixed = TRUE)
+geospatial_data$id <- gsub("ÃŸ","ß", geospatial_data$id, fixed = TRUE)
+
+geo_data <- left_join(geospatial_data, clean, by = c("id" = "region"))
+
+# new plot
+
+map_plot_new <- ggplot() + 
+  geom_polygon(data = geo_data, mapping = aes(x = long, y = lat, group = as.factor(id), fill = cut_interval(as.numeric(unemployment_rate), n = 8))) + theme_void() 
+
+
+map_plot
+
+```
+
+## Assignment 3 - Repeated Actions in R and database management
+
+``` {r Ass3-1}
+rm(list=ls())
+set.seed(42)
+
+# 2 ways of generating random integers
+vec1 <- round(runif(50000, 0 , 100),0)
+vec2 <- sample(1:100, 50000, replace = TRUE)
+
+#1 vectorized FASTEST
+t1 <- system.time(
+  absDiff1 <- sqrt((vec1-vec2)^2)
+)
+
+# preallocated object and loop
+absDiff2 <- rep(NA,50000)
+t2 <- system.time(
+  for (i in 1:length(absDiff2)) {
+    absDiff2[i] <- sqrt((vec1[i] - vec2[i])^2)
+  }
+)
+
+# growing object in loop VERY SLOW
+absDiff3 <- NULL
+t3 <- system.time(
+  for (i in 1:length(vec1)) {
+    absDiff3 <- c(absDiff3, sqrt((vec1[i] - vec2[i])^2))
+  }
+)
+
+#apply/mapply lapply family
+
+t4 <- system.time(
+  absDiff4 <- mapply(function(x,y) {sqrt((x-y)^2)}, vec1,vec2)
+)
+rbind(t1,t2,t3,t4)
+
+
+
+```
+
+
+``` {r Ass3-2}
+# SQLite databases using SQL queries
+
+library(DBI)
+library(RSQLite)
+
+con <- dbConnect(RSQLite::SQLite(), "./Ass3/data/soccer.sqlite")
+
+q1 <- dbGetQuery(con, "SELECT Team.id FROM Team WHERE Team.team_long_name IN ('FC Bayern Munich', 'Borussia Dortmund')")
+
+q2 <- dbGetQuery(con, "SELECT Match.id FROM Match WHERE Match.home_team_id = '9823' AND Match.away_team_id = '9789' AND Match.season = '2015/2016'")
+
+q3 <- dbGetQuery(con, "SELECT Match.date FROM Match WHERE Match.id = '2002155'")
+
+query <- rep(NA,11)
+for (i in 1:11) {
+  query[i] <- paste0('home_player_',i)
+}
+
+players <- rep(NA,11)
+for (i in 1:11) {
+  players[i] <- dbGetQuery(con, paste0("SELECT player_name FROM Player LEFT JOIN Match ON Player.id = Match.",query[i]," WHERE Match.id = '2002155'"))
+  }
+q4 <- players
+print(players)
+
+
+help <- rep(NA,11)
+for (i in 1:11) {
+  help[i] <- dbGetQuery(con, paste0("SELECT ",query[i]," FROM Match WHERE Match.id = '2002155'"))
+  }
+
+query_new <- paste(paste("'", help, "'", collapse = ", ", sep = ""))
+
+
+q4 <- dbGetQuery(con, paste0("SELECT AVG(height), AVG(weight) FROM Player WHERE Player.id IN (",query_new,")"))
+
+
+q5 <- dbGetQuery(con, "SELECT COUNT(DISTINCT(League_id))AS how_many FROM Match")
+
+
+```
+
+
+## Assignment 4 - Multilevel Linear Models and Dashboards with Shiny
+
+``` {r Ass4}
+
+library(lme4)
+library(arm)
+county <- read.csv("Ass4/county.csv")
+household <- read.csv("Ass4/household.csv")
+
+uran <- left_join(household, county, by = "county")[,-5]
+
+m1 <- lmer(log.radon ~ 1 + basement + (1| county), data = uran)
+coef(m1)
+ranef(m1)
+fixef(m1)
+
+fix_m1 <- lm(log.radon ~ basement + as.factor(county) - 1, data = uran)
+coef(fix_m1)
+int_m1 <- coef(m1)$county[1][[1]]
+int_fix_m1 <- coef(fix_m1)[c(2:86)]
+
+abs_dev <- abs(int_m1 - int_fix_m1)
+result <- cbind.data.frame(county$county.name, abs_dev)
+
+print(c(result[which(result$abs_dev == max(abs_dev)),],
+        result[which(result$abs_dev == min(abs_dev)),]))
+
+max(abs_dev)
+min(abs_dev)
+
+uran %>% group_by(county.name.x) %>% count() %>% arrange(desc(n))
+
+#m2_test <- lmer(log.radon ~ 1 + basement + (1 + log.uranium | county), data = uran)
+m2 <- lmer(log.radon ~ 1 + basement + log.uranium + (1 | county), data = uran)
+summary(m2)
+summary(m2_test)
+
+int_m2 <- coef(m2)$county[1][[1]]+coef(m2)$county[3][[1]]*county$log.uranium+coef(m2)$county[2][[1]]
+se <- se.ranef(m2)$county
+plot_dat <- cbind.data.frame(int_m2, county$county.name, county$log.uranium, se)
+
+fixef_int <- fixef(m3)
+
+plot1 <- ggplot(plot_dat, aes(x = county$log.uranium, y = int_m2)) +
+  geom_point()+
+  geom_errorbar(aes(ymin = int_m2 - se, ymax = int_m2 + se)) + 
+  geom_abline(slope = fixef(m2)[3], intercept = (fixef(m2)[1]+fixef(m2)[2]))
+plot1
+
+
+m3 <- lmer(log.radon ~ 1 + basement + (1 + basement | county), data = uran)
+coef(m3)
+plot_dat2 <- cbind.data.frame("int" = coef(m3)$county[1][[1]], "slope" = coef(m3)$county[2][[1]], "name" = county$county.name)
+
+
+library(shiny)
+
+ui <- navbarPage("Assignment IV",
+  tabPanel("Varying Intecept and Slope", 
+           sidebarLayout(
+             sidebarPanel(
+               selectInput('county', label = 'Choose county: ', choices = county$county.name, selected = 'ANOKA'
+                           )
+                          ),
+             mainPanel(
+               plotOutput('model3')
+                       )
+           )
+))
+
+server <- function(input, output, session) {
+  observeEvent(input$county, {
+    dat <- filter(uran, county.name.x == input$county)
+    temp <- filter(plot_dat2, name == input$county)
+    
+    output$model3 <- renderPlot({
+      ggplot(dat, aes(x = basement, y = log.radon)) + 
+        geom_point(position = "jitter") + 
+        geom_abline(intercept = as.numeric(temp[1]), slope = as.numeric(temp[2]))
+    })
+  })
+}
+
+shinyApp(ui, server)
+
+```
+
+## Assignment 5 - GitHUb and the ticketmaster.com API
+GIThub is skipped here but logical steps: Create a oublic repo on github and clone it to own harddrive, initiate a readme and reasonable project folder structure. when using the shell always proceed in the following:
+1. save current changes made to files MODIFY
+git pull - to make yure you are up to date
+git add ./-A/specified file STAGE
+git commit -m 'a meaningful meassage' - COMMIT
+git pull
+git push
+
+git status
+
+
+``` {r Ass5}
+rm(list=ls())
+library(httr)
+library(rlist)
+library(jsonlite)
+
+source('tm_api_key.R') # get key stored separately
+
+get1 <- GET(paste0("https://app.ticketmaster.com/discovery/v2/venues?apikey=",app_key,"&locale=*&countryCode=DE")) %>% content(as = "text") %>% fromJSON() 
+
+venues <- as.data.frame(get1$`_embedded`$venues)
+
+pages <- get1[3]$page$totalPages
+number <- get1[3]$page$totalElements
+
+results <- vector(mode = 'list', length = pages)
+for (i in 1:50) {
+  query <- paste0("https://app.ticketmaster.com/discovery/v2/venues?apikey=",app_key,"&locale=*&countryCode=DE&page=",i-1)
+  results[i] <- GET(query) %>% content(as = 'text') %>% fromJSON()
+  
+
+  Sys.sleep(0.2)
+}
+
+venues_all <- as.data.frame(results[1])
+for (i in 2:50) {
+  df <- as.data.frame(results[i])
+  venues_all <- full_join(venues_all,df)
+}
+
+# PLotly map
+
+library(plotly)
+if (!require("sf")) install.packages("sf")
+if (!require("rnaturalearth")) install.packages("rnaturalearth")
+library(sf) # for simple features
+library(rnaturalearth) # for geo data
+
+ger <- ne_countries(country = 'Germany', returnclass = 'sf')
+
+venues_all %>% plot_geo() %>% add_markers(x = ~venues.location$longitude, y = ~venues.location$latitude, color = 'red', opacity = 0.8)
+
+
+library(ggplot2)
+
+ggplot() + geom_polygon(aes(x = long, y = lat, group = group), data = map_data("world", region = "Germany"), col = 'black', fill = 'grey') + coord_quickmap() + labs(title = "Some venues across Germany", x = "longitude", y = "latitude") + theme_void() + geom_point(aes(x = as.numeric(venues.location$longitude), y = as.numeric(venues.location$latitude)), data = venues_all)
+```
+
+
